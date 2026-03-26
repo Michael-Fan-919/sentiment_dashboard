@@ -67,11 +67,8 @@ SENTIMENT_COLORS = {
 
 # ==================== 风险关键词词典 ====================
 RISK_KEYWORDS = {
-    '口味': ['甜', '苦', '酸', '淡', '浓', '腻', '香精', '糖', '味道', '好喝', '难喝', '怪味', '异味'],
-    '包装': ['包装', '杯子', '漏', '洒', '破', '盖子', '吸管', '袋', '外观', '设计'],
-    '口感': ['口感', '冰', '凉', '热', '温', '稀', '稠', '顺滑', '粗糙', '颗粒', '沉淀'],
-    '服务': ['服务', '态度', '慢', '等', '排队', '客服', '店员', '不理', '冷漠'],
-    '价格': ['贵', '便宜', '价', '钱', '不值', '性价比', '优惠', '券', '贵死', '涨价'],
+    '口味': ['甜', '苦', '酸', '淡', '浓', '腻', '香精', '糖', '味道', '好喝', '难喝', '怪味', '异味',
+            '口感', '冰', '凉', '热', '温', '稀', '稠', '顺滑', '粗糙', '颗粒', '沉淀'],
     '食安': ['细菌', '病毒', '霉菌', '发霉', '变质', '腐烂', '臭', '长毛', '虫子', '虫卵', '污染', 
              '农药', '残留', '重金属', '铅', '汞', '铬', '塑化剂', '有毒', '毒',
              '添加物', '添加剂', '香料', '色素', '防腐剂', '甜味剂', '人工', '合成',
@@ -81,10 +78,6 @@ RISK_KEYWORDS = {
 
 RISK_TYPE_COLORS = {
     '口味': '#e74c3c',
-    '包装': '#3498db',
-    '口感': '#f39c12',
-    '服务': '#9b59b6',
-    '价格': '#1abc9c',
     '食安': '#c0392b',
     '其他': '#95a5a6'
 }
@@ -225,9 +218,15 @@ def render_filters(df):
     min_date = df['date'].min()
     max_date = df['date'].max()
     
+    # 默认选中本周（周一到今天）
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())  # 本周一
+    default_start = max(week_start, min_date)  # 不早于数据最早日期
+    default_end = min(today, max_date)         # 不晚于数据最晚日期
+    
     date_range = st.sidebar.date_input(
         "选择时间范围",
-        value=(min_date, max_date),
+        value=(default_start, default_end),
         min_value=min_date,
         max_value=max_date
     )
@@ -707,17 +706,16 @@ def generate_wordcloud_for_dataframe(df, title):
         else:
             colormap = 'Blues'
         
-        # 尝试多个中文字体路径（Windows + macOS 兼容）
+        # 字体路径：优先使用项目内的字体（兼容 GitHub 部署）
         import os
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
         font_paths = [
-            r'C:\Windows\Fonts\msyh.ttc',        # 微软雅黑
-            r'C:\Windows\Fonts\simhei.ttf',       # 黑体
-            r'C:\Windows\Fonts\simsun.ttc',       # 宋体
-            r'C:\Windows\Fonts\simkai.ttf',       # 楷体
-            '/Library/Fonts/Arial Unicode.ttf',
-            '/System/Library/Fonts/PingFang.ttc',
-            '/System/Library/Fonts/STHeiti Light.ttc',
-            '/System/Library/Fonts/Hiragino Sans GB.ttc',
+            os.path.join(_script_dir, 'NotoSansSC-Regular.otf'),  # 项目内字体（跨平台）
+            r'C:\Windows\Fonts\msyh.ttc',        # Windows 微软雅黑
+            r'C:\Windows\Fonts\simhei.ttf',       # Windows 黑体
+            r'C:\Windows\Fonts\simsun.ttc',       # Windows 宋体
+            '/Library/Fonts/Arial Unicode.ttf',   # macOS
+            '/System/Library/Fonts/PingFang.ttc', # macOS
         ]
         font_path = None
         for fp in font_paths:
@@ -856,6 +854,26 @@ def main():
     
     # 渲染筛选器
     filtered_df = render_filters(df)
+    
+    # 筛选后无数据，显示空状态提示
+    if len(filtered_df) == 0:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='text-align: center; padding: 4rem 0;'>"
+            "📭<h2 style='color: #999; margin: 1rem 0;'>当前筛选条件下无数据</h2>"
+            "<p style='color: #aaa;'>请尝试调整侧边栏的时间范围、品牌、情感向等筛选条件</p>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+        st.markdown("---")
+        st.markdown(
+            f"<div style='text-align: center; color: #666;'>"
+            f"☕ 茶饮/咖啡品牌舆情风险分析 Dashboard | "
+            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+        return
     
     # 主内容区
     render_overview_metrics(filtered_df)
