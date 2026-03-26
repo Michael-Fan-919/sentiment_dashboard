@@ -21,7 +21,7 @@ from io import BytesIO
 
 # 设置页面配置
 st.set_page_config(
-    page_title="茶饮/咖啡品牌舆情风险分析 Dashboard",
+    page_title="茶饮/咖啡品牌评论分析 Dashboard",
     page_icon="☕",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -242,7 +242,7 @@ def render_filters(df):
     # 风险类型筛选
     risk_types = sorted(df['risk_type'].unique())
     selected_risk_types = st.sidebar.multiselect(
-        "风险类型",
+        "评论类型",
         options=risk_types,
         default=risk_types
     )
@@ -272,10 +272,10 @@ def render_filters(df):
 
 def render_overview_metrics(df):
     """渲染数据总览指标卡"""
-    st.markdown('<div class="main-header">☕ 茶饮/咖啡品牌舆情风险分析 Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">☕ 茶饮/咖啡品牌评论分析 Dashboard</div>', unsafe_allow_html=True)
     
     # ==================== 产品风险等级排行榜 ====================
-    st.subheader("🚨 产品风险等级排行榜")
+    st.subheader("🚨 单品热度排行榜")
     
     # 计算每个产品的风险指标
     product_metrics = []
@@ -390,8 +390,7 @@ def render_overview_metrics(df):
         )
 
 def render_sentiment_charts(df):
-    """渲染情感向分析图表"""
-    st.subheader("📊 情感向分析")
+    st.subheader("📊 产品正负面占比")
     
     col1, col2 = st.columns(2)
     
@@ -445,7 +444,7 @@ def render_sentiment_charts(df):
 
 def render_trend_charts(df):
     """渲染趋势图表"""
-    st.subheader("📈 舆论趋势分析")
+    st.subheader("📈 评论声量趋势变化")
     
     # 时间粒度选择
     time_granularity = st.radio(
@@ -533,7 +532,7 @@ def render_trend_charts(df):
 
 def render_risk_type_charts(df):
     """渲染风险类型图表"""
-    st.subheader("📋 风险类型分析")
+    st.subheader("📋 评论类型分析")
     
     col1, col2 = st.columns(2)
     
@@ -546,7 +545,7 @@ def render_risk_type_charts(df):
             type_counts,
             values='count',
             names='risk_type',
-            title='风险类型分布',
+            title='评论类型分布',
             color='risk_type',
             color_discrete_map=RISK_TYPE_COLORS
         )
@@ -563,7 +562,7 @@ def render_risk_type_charts(df):
             x='brand',
             y='count',
             color='risk_type',
-            title='各品牌风险类型构成',
+            title='各品牌评论类型构成',
             color_discrete_map=RISK_TYPE_COLORS,
             barmode='stack'
         )
@@ -710,12 +709,14 @@ def generate_wordcloud_for_dataframe(df, title):
         import os
         _script_dir = os.path.dirname(os.path.abspath(__file__))
         font_paths = [
-            os.path.join(_script_dir, 'NotoSansSC-Regular.otf'),  # 项目内字体（跨平台）
-            r'C:\Windows\Fonts\msyh.ttc',        # Windows 微软雅黑
-            r'C:\Windows\Fonts\simhei.ttf',       # Windows 黑体
-            r'C:\Windows\Fonts\simsun.ttc',       # Windows 宋体
-            '/Library/Fonts/Arial Unicode.ttf',   # macOS
-            '/System/Library/Fonts/PingFang.ttc', # macOS
+            os.path.join(_script_dir, 'NotoSansSC-VF.ttf'),       # 项目内字体（跨平台首选）
+            os.path.join(_script_dir, 'NotoSansSC-Regular.otf'),   # 项目内字体（备用）
+            r'C:\Windows\Fonts\NotoSansSC-VF.ttf',                 # Windows 本机 Noto Sans SC
+            r'C:\Windows\Fonts\msyh.ttc',                          # Windows 微软雅黑
+            r'C:\Windows\Fonts\simhei.ttf',                        # Windows 黑体
+            r'C:\Windows\Fonts\simsun.ttc',                        # Windows 宋体
+            '/Library/Fonts/Arial Unicode.ttf',                    # macOS
+            '/System/Library/Fonts/PingFang.ttc',                  # macOS
         ]
         font_path = None
         for fp in font_paths:
@@ -760,7 +761,7 @@ def render_data_export(df):
         st.download_button(
             label="📥 下载 CSV",
             data=csv,
-            file_name=f"舆情数据_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"评论数据_{datetime.now().strftime('%Y%m%d')}.csv",
             mime='text/csv'
         )
     
@@ -768,13 +769,13 @@ def render_data_export(df):
         # Excel 导出
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='舆情数据')
+            df.to_excel(writer, index=False, sheet_name='评论数据')
         excel_data = output.getvalue()
         
         st.download_button(
             label="📥 下载 Excel",
             data=excel_data,
-            file_name=f"舆情数据_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=f"评论数据_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
 
@@ -868,7 +869,7 @@ def main():
         st.markdown("---")
         st.markdown(
             f"<div style='text-align: center; color: #666;'>"
-            f"☕ 茶饮/咖啡品牌舆情风险分析 Dashboard | "
+            f"☕ 茶饮/咖啡品牌评论分析 Dashboard | "
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             f"</div>",
             unsafe_allow_html=True
@@ -927,7 +928,7 @@ def main():
     st.markdown("---")
     st.markdown(
         f"<div style='text-align: center; color: #666;'>"
-        f"☕ 茶饮/咖啡品牌舆情风险分析 Dashboard | "
+        f"☕ 茶饮/咖啡品牌评论分析 Dashboard | "
         f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         f"</div>",
         unsafe_allow_html=True
