@@ -17,7 +17,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime, timedelta
 import re
+import sys
+import os
 from io import BytesIO
+
+# ==================== 模型加载 ====================
+# 脚本所在目录（相对路径基准）
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 将脚本目录加入 sys.path，以便 import predict_sentiment
+if _BASE_DIR not in sys.path:
+    sys.path.insert(0, _BASE_DIR)
+
+@st.cache_resource(show_spinner="正在加载情感分类模型…")
+def load_sentiment_model():
+    """加载并缓存情感分类模型（仅在首次运行时加载）"""
+    from predict_sentiment import SentimentPredictor
+    model_dir = os.path.join(_BASE_DIR, 'model')
+    return SentimentPredictor(model_dir=model_dir)
 
 # 设置页面配置
 st.set_page_config(
@@ -84,11 +101,17 @@ RISK_TYPE_COLORS = {
 
 # ==================== 数据加载与清洗 ====================
 
-@st.cache_data
-def load_and_process_data(file_path=None):
-    """加载并处理数据"""
+@st.cache_data(show_spinner="正在加载并分析数据，首次运行需要推理情感分类，请稍候…")
+def load_and_process_data(file_path=None, file_bytes=None, file_suffix='.xlsx'):
+    """加载并处理数据（支持文件路径或字节流）"""
     try:
-        if file_path:
+        if file_bytes is not None:
+            buf = BytesIO(file_bytes)
+            if file_suffix == '.csv':
+                df = pd.read_csv(buf)
+            else:
+                df = pd.read_excel(buf)
+        elif file_path:
             if file_path.endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
@@ -106,7 +129,8 @@ def clean_and_enrich_data(df):
     数据清洗与丰富：
     - 标准化列名
     - 转换时间格式
-    - 从情感向映射风险等级
+    - 用模型对评论内容进行情感分类（无需「情感向」列）
+    - 将情感分类结果映射为风险等级
     - 从评论内容提取风险类型
     """
     df = df.copy()
@@ -118,7 +142,6 @@ def clean_and_enrich_data(df):
         '评论内容': 'comment',
         '评论日期': 'datetime',
         'IP 属地': 'region',
-        '情感向': 'sentiment',
         '用户名': 'username',
         '是否二上': 'is_second',
         '出上线时间': 'launch_date',
@@ -145,13 +168,17 @@ def clean_and_enrich_data(df):
     df['year_month'] = df['datetime'].dt.to_period('M').astype(str)
     df['week'] = df['datetime'].dt.to_period('W').astype(str)
     
-    # 标准化情感向
-    sentiment_mapping = {
-        '正向': '正向',
-        '中性': '中性',
-        '负向': '负向'
-    }
-    df['sentiment'] = df['sentiment'].map(sentiment_mapping).fillna('中性')
+    # 处理缺失值
+    df['brand'] = df['brand'].fillna('未知品牌')
+    df['product'] = df['product'].fillna('未知产品')
+    df['comment'] = df['comment'].fillna('')
+    df['region'] = df.get('region', pd.Series(['未知'] * len(df))).fillna('未知')
+    
+    # ========== 用模型对评论内容进行情感分类 ==========
+    predictor = load_sentiment_model()
+    texts = df['comment'].tolist()
+    df['sentiment'] = predictor.predict(texts)
+    # ===================================================
     
     # 将情感向映射为风险等级
     risk_mapping = {
@@ -163,12 +190,6 @@ def clean_and_enrich_data(df):
     
     # 从评论内容提取风险类型
     df['risk_type'] = df['comment'].apply(extract_risk_type)
-    
-    # 处理缺失值
-    df['brand'] = df['brand'].fillna('未知品牌')
-    df['product'] = df['product'].fillna('未知产品')
-    df['comment'] = df['comment'].fillna('')
-    df['region'] = df.get('region', pd.Series(['未知'] * len(df))).fillna('未知')
     
     # 添加风险标记（负向和中性视为风险）
     df['is_risk'] = df['sentiment'].isin(['负向', '中性'])
@@ -195,77 +216,92 @@ def extract_risk_type(comment):
 # ==================== 筛选器组件 ====================
 
 def render_filters(df):
-    """渲染侧边栏筛选器"""
+    """
+    渲染侧边栏筛选器（级联过滤）。
+    各筛选项的可选项基于前序筛选结果动态收窄：
+      品牌 → 产品 → 时间范围 → 情感向 → 评论类型
+    """
     st.sidebar.header("🔍 数据筛选")
-    
-    # 品牌多选
-    brands = sorted(df['brand'].unique())
+
+    # ── 第 1 步：品牌 ──────────────────────────────────────────
+    all_brands = sorted(df['brand'].unique())
     selected_brands = st.sidebar.multiselect(
         "选择品牌",
-        options=brands,
-        default=brands
+        options=all_brands,
+        default=all_brands,
+        key='filter_brands'
     )
-    
-    # 产品多选（可选，避免太多选项）
-    products = sorted(df['product'].unique())
+    # 空选视为全选
+    if not selected_brands:
+        selected_brands = all_brands
+    after_brand = df[df['brand'].isin(selected_brands)]
+
+    # ── 第 2 步：产品（选项来自品牌过滤后的结果）──────────────
+    avail_products = sorted(after_brand['product'].unique())
     selected_products = st.sidebar.multiselect(
         "选择产品",
-        options=products,
-        default=products
+        options=avail_products,
+        default=avail_products,
+        key='filter_products'
     )
-    
-    # 时间范围选择
-    min_date = df['date'].min()
-    max_date = df['date'].max()
-    
-    # 默认选中本周（周一到今天）
+    if not selected_products:
+        selected_products = avail_products
+    after_product = after_brand[after_brand['product'].isin(selected_products)]
+
+    # ── 第 3 步：时间范围（min/max 来自品牌+产品过滤后）─────────
+    min_date = after_product['date'].min()
+    max_date = after_product['date'].max()
+
     today = datetime.now().date()
-    week_start = today - timedelta(days=today.weekday())  # 本周一
-    default_start = max(week_start, min_date)  # 不早于数据最早日期
-    default_end = min(today, max_date)         # 不晚于数据最晚日期
-    
+    week_start = today - timedelta(days=today.weekday())
+    default_start = max(week_start, min_date)
+    default_end   = min(today, max_date)
+
     date_range = st.sidebar.date_input(
         "选择时间范围",
         value=(default_start, default_end),
         min_value=min_date,
-        max_value=max_date
+        max_value=max_date,
+        key='filter_date'
     )
-    
-    # 情感向筛选
-    sentiments = ['正向', '中性', '负向']
+    if len(date_range) == 2:
+        after_date = after_product[
+            (after_product['date'] >= date_range[0]) &
+            (after_product['date'] <= date_range[1])
+        ]
+    else:
+        after_date = after_product
+
+    # ── 第 4 步：情感向（选项来自前三步过滤后）──────────────────
+    sentiment_order = ['正向', '中性', '负向']
+    avail_sentiments = [s for s in sentiment_order if s in after_date['sentiment'].unique()]
     selected_sentiments = st.sidebar.multiselect(
         "情感向",
-        options=sentiments,
-        default=sentiments
+        options=avail_sentiments,
+        default=avail_sentiments,
+        key='filter_sentiments'
     )
-    
-    # 风险类型筛选
-    risk_types = sorted(df['risk_type'].unique())
+    if not selected_sentiments:
+        selected_sentiments = avail_sentiments
+    after_sentiment = after_date[after_date['sentiment'].isin(selected_sentiments)]
+
+    # ── 第 5 步：评论类型（选项来自前四步过滤后）────────────────
+    avail_risk_types = sorted(after_sentiment['risk_type'].unique())
     selected_risk_types = st.sidebar.multiselect(
         "评论类型",
-        options=risk_types,
-        default=risk_types
+        options=avail_risk_types,
+        default=avail_risk_types,
+        key='filter_risk_types'
     )
-    
-    # 应用筛选
-    filtered_df = df[
-        (df['brand'].isin(selected_brands)) &
-        (df['product'].isin(selected_products)) &
-        (df['sentiment'].isin(selected_sentiments)) &
-        (df['risk_type'].isin(selected_risk_types))
-    ]
-    
-    # 时间筛选
-    if len(date_range) == 2:
-        filtered_df = filtered_df[
-            (filtered_df['date'] >= date_range[0]) &
-            (filtered_df['date'] <= date_range[1])
-        ]
-    
-    # 重置按钮
+    if not selected_risk_types:
+        selected_risk_types = avail_risk_types
+
+    filtered_df = after_sentiment[after_sentiment['risk_type'].isin(selected_risk_types)]
+
+    # ── 重置按钮 ─────────────────────────────────────────────────
     if st.sidebar.button("🔄 重置筛选"):
         st.rerun()
-    
+
     return filtered_df
 
 # ==================== 可视化模块 ====================
@@ -706,11 +742,9 @@ def generate_wordcloud_for_dataframe(df, title):
             colormap = 'Blues'
         
         # 字体路径：优先使用项目内的字体（兼容 GitHub 部署）
-        import os
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
         font_paths = [
-            os.path.join(_script_dir, 'NotoSansSC-VF.ttf'),       # 项目内字体（跨平台首选）
-            os.path.join(_script_dir, 'NotoSansSC-Regular.otf'),   # 项目内字体（备用）
+            os.path.join(_BASE_DIR, 'NotoSansSC-VF.ttf'),       # 项目内字体（跨平台首选）
+            os.path.join(_BASE_DIR, 'NotoSansSC-Regular.otf'),   # 项目内字体（备用）
             r'C:\Windows\Fonts\NotoSansSC-VF.ttf',                 # Windows 本机 Noto Sans SC
             r'C:\Windows\Fonts\msyh.ttc',                          # Windows 微软雅黑
             r'C:\Windows\Fonts\simhei.ttf',                        # Windows 黑体
@@ -786,7 +820,7 @@ def render_raw_data(df):
     st.subheader("📋 原始数据")
     
     # 选择显示的列
-    display_cols = ['brand', 'product', 'datetime', 'comment', 'sentiment', 'risk_level', 'risk_type', 'region']
+    display_cols = ['brand', 'product', 'datetime', 'comment', 'sentiment', 'risk_type', 'region']
     available_cols = [col for col in display_cols if col in df.columns]
     
     # 分页显示
@@ -810,9 +844,8 @@ def main():
     # 侧边栏 - 数据上传
     st.sidebar.header("📁 数据上传")
     
-    # 默认数据文件路径（与脚本同目录）
-    import os
-    default_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '产品评价_茶饮舆论.xlsx')
+    # 默认数据文件路径（与脚本同目录，可将数据文件放在项目根目录）
+    default_file = os.path.join(_BASE_DIR, '产品评价_茶饮舆论.xlsx')
     
     uploaded_file = st.sidebar.file_uploader(
         "上传数据文件 (CSV/Excel)",
@@ -821,18 +854,15 @@ def main():
     
     # 加载数据
     if uploaded_file is not None:
-        # 保存上传的文件
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = tmp.name
-        df = load_and_process_data(tmp_path)
+        # 获取文件后缀
+        suffix = os.path.splitext(uploaded_file.name)[-1].lower()
+        file_bytes = uploaded_file.getvalue()
+        df = load_and_process_data(file_bytes=file_bytes, file_suffix=suffix)
         st.sidebar.success("✅ 已加载上传的数据")
     else:
         # 尝试加载默认文件
-        import os
         if os.path.exists(default_file):
-            df = load_and_process_data(default_file)
+            df = load_and_process_data(file_path=default_file)
             st.sidebar.success("✅ 已加载默认数据文件")
         else:
             st.sidebar.error("❌ 未找到数据文件，请上传")
